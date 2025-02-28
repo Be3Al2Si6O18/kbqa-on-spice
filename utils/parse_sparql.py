@@ -19,7 +19,7 @@ class Parser:
             body = query[3:]
             body_lines = body.strip('} {').split('.')[:-1]
             triplets = ['(' + ' '.join([self.remove_prefix(elem) for elem in body_line.strip().split(' ')]) + ')' for body_line in body_lines]
-            return '(IS_TRUE {})'.format(' '.join(triplets))
+            return '(ASK {})'.format(' '.join(triplets))
 
         if query.startswith('SELECT'):
             query = query[6:]
@@ -206,10 +206,14 @@ class Parser:
         parsed_dict = {}
 
         for var_name, dep_relations in var_dep_list:
-            clause = self.triplet_to_clause(var_name, dep_relations[0], parsed_dict)
-            for tri in dep_relations[1:]:
-                n_clause = self.triplet_to_clause(var_name, tri, parsed_dict)
-                clause = '(AND {} {})'.format(clause, n_clause)
+            # clause = self.triplet_to_clause(var_name, dep_relations[0], parsed_dict)
+            # for tri in dep_relations[1:]:
+            #     n_clause = self.triplet_to_clause(var_name, tri, parsed_dict)
+            #     clause = '(AND {} {})'.format(clause, n_clause)
+            if len(dep_relations) == 1:
+                clause = self.triplet_to_clause(var_name, dep_relations[0], parsed_dict)
+            else:
+                clause = '(AND ' + ' '.join([self.triplet_to_clause(var_name, tri, parsed_dict) for tri in dep_relations]) + ')'
             parsed_dict[var_name] = clause
         return parsed_dict[ret_var]
     
