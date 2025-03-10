@@ -3,7 +3,7 @@ import shutil
 import json
 from parse_sparql import *
 
-parser = Parser()
+parser = SparqlParser()
 
 def isdirect(question):
     if question["question-type"].startswith("Simple Question"):
@@ -28,11 +28,14 @@ def generate_train_data(file_path):
             context = ""
         if "sparql" not in answer:
             continue
-        qa["qid"] = file_path.split("_")[-1][:-4] + str(i // 2)
+
+        dir_name, file_name = file_path.split('/')[-2:]
+        qa["qid"] = dir_name[3:] + '.' + file_name[3:-5] + '.' + str(i // 2)
         qa["question"] = context + question["utterance"] + " [CTX]"
         qa["sparql_query"] = answer["sparql"]
+        qa["question_type"] = question['description'] if 'description' in question else question['question-type']
         try:
-            qa["s_expression"] = parser.parse_query(answer["sparql"])
+            qa["s_expression"] = parser.parse_sparql(answer["sparql"])
         except:
             print(qa["question"])
             print(qa["sparql_query"])
@@ -63,19 +66,36 @@ def generate_test_data(file_path):
 
 
 
-root = "../data/SPICE/train/"
-data = []
-for dir in os.listdir(root):
-    for file_name in os.listdir(root + dir):
-        data += generate_train_data(root + dir + '/' + file_name)
-json.dump(data, open("../data/processed_spice_data/train_full.json", 'w'), indent=2)
+# root = "../data/SPICE/train/"
+# data = []
+# for dir in os.listdir(root):
+#     for file_name in os.listdir(root + dir):
+#         data += generate_train_data(root + dir + '/' + file_name)
+# json.dump(data, open("../data/processed_spice_data/train_full.json", 'w'), indent=2)
+
+# root = "../data/SPICE/valid/"
+# data = []
+# for dir in os.listdir(root):
+#     for file_name in os.listdir(root + dir):
+#         data += generate_train_data(root + dir + '/' + file_name)
+#         if len(data) > 1000:
+#             break
+# json.dump(data, open("../data/processed_spice_data/dev_1000.json", 'w'), indent=2)
 
 root = "../data/SPICE/valid/"
-data = []
+data = {}
 for dir in os.listdir(root):
     for file_name in os.listdir(root + dir):
-        data += generate_test_data(root + dir + '/' + file_name)
-json.dump(data, open("../data/processed_spice_data/dev_full.json", 'w'), indent=2)
+        new_data =  generate_train_data(root + dir + '/' + file_name)
+        for example in new_data:
+            question_type = example['question_type']
+            # print(question_type)
+            if question_type not in data:
+                data[question_type] = []
+            if len(data[question_type]) < 50:
+                data[question_type].append(example)
+json.dump([example for question_type in data for example in data[question_type]], open("../data/processed_spice_data/dev_each_type_50.json", 'w'), indent=2)
+
 # output_dir = "data/processed_spice_data/"
 # shutil.rmtree(output_dir)
 # os.mkdir(output_dir)

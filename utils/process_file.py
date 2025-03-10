@@ -11,6 +11,7 @@ def process_file(filename):
         sele_dict["sparql_query"] = example["sparql_query"]
         sele_dict["s_expression"] = example["s_expression"]
         sele_dict["answer"] = example["answer"]
+        sele_dict["question_type"] = example["question_type"]
         selected_data.append(sele_dict)
     return selected_data
 

@@ -106,9 +106,10 @@ def type_generator(question, prompt_type, api_key, LLM_engine):
             )
             got_result = True
         except:
+            print("fail to get result!")
             sleep(3)
-    gene_exp = resp.choices[0].message.content
-    return gene_exp
+    gene_type = resp.choices[0].message.content
+    return gene_type
 
 
 def ep_generator(question, selected_examples, temp, que_to_s_dict_train, wikidata_mid_to_fn_dict, api_key, LLM_engine,
@@ -156,6 +157,7 @@ def ep_generator(question, selected_examples, temp, que_to_s_dict_train, wikidat
             )
             got_result = True
         except:
+            print("fail to get result!")
             sleep(3)
     gene_exp = [exp.message.content for exp in resp.choices]
     return gene_exp
@@ -211,7 +213,7 @@ def get_right_mid_set(fn, id_dict, question):
                 else:
                     type_to_mid_dict[cur_type][mid] = id_dict[mid]
                 type_list.append(cur_type)
-    tokenized_type_list = [re.split('\.|_', doc) for doc in type_list]
+    tokenized_type_list = [re.split(r'\.|_', doc) for doc in type_list]
     #     tokenized_question = tokenizer.tokenize(question)
     tokenized_question = question.split()
     bm25 = BM25Okapi(tokenized_type_list)
@@ -334,7 +336,7 @@ def bound_to_existed(question, s_expression, found_mids, two_hop_rela_dict,
                 expression_segment[i - 1].endswith("AND") or expression_segment[i - 1].endswith("COUNT") or
                 expression_segment[i - 1].endswith("MAX") or expression_segment[i - 1].endswith("MIN")) and (
                 not any(ele.isupper() for ele in seg)):
-            tokenized_query = re.split('\.|_', processed_seg)
+            tokenized_query = re.split(r'\.|_', processed_seg)
             tokenized_query = " ".join(tokenized_query)
             tokenized_question = question.strip(' ?')
             tokenized_query = tokenized_query + ' ' + tokenized_question
@@ -379,8 +381,8 @@ def bound_to_existed(question, s_expression, found_mids, two_hop_rela_dict,
                     expression_segment[j - 1].endswith("AND") or expression_segment[j - 1].endswith("COUNT") or
                     expression_segment[j - 1].endswith("MAX") or expression_segment[j - 1].endswith("MIN")) and (
             not any(ele.isupper() for ele in seg)):
-                tokenized_enti = [re.split('\.|_', doc) for doc in possible_entities_set]
-                tokenized_query = re.split('\.|_', processed_seg)
+                tokenized_enti = [re.split(r'\.|_', doc) for doc in possible_entities_set]
+                tokenized_query = re.split(r'\.|_', processed_seg)
                 bm25 = BM25Okapi(tokenized_enti)
                 top3_ques = bm25.get_top_n(tokenized_query, possible_entities_set, n=3)
                 enti_replace_dict[j] = list(set(top3_ques))
@@ -603,6 +605,7 @@ def parse_args():
     return args
 
 def main():
+    print("begin",flush=True)
     openai.base_url = 'http://222.29.156.145:8000/v1/'
     args = parse_args()
     nlp = spacy.load("en_core_web_sm")
@@ -611,7 +614,7 @@ def main():
     contriever_searcher = FaissSearcher('contriever_fb_relation/freebase_contriever_index', query_encoder)
     hsearcher = HybridSearcher(contriever_searcher, bm25_searcher)
     rela_corpus = LuceneSearcher('contriever_fb_relation/index_relation_fb')
-    dev_data = process_file(args.eva_data_path)
+    dev_data = process_file(args.eva_data_path)[100:]
     train_data = process_file(args.train_data_path)
     que_to_s_dict_train = {data["question"]: data["s_expression"] for data in train_data}
     
@@ -642,13 +645,13 @@ def main():
     with open(args.fb_roles_path) as f:
         lines = f.readlines()
     relationships = []
-    entities_set = []
+    # entities_set = []
     relationship_to_enti = {}
     for line in lines:
         info = line.split(" ")
         relationships.append(info[1])
-        entities_set.append(info[0])
-        entities_set.append(info[2])
+        # entities_set.append(info[0])
+        # entities_set.append(info[2])
         relationship_to_enti[info[1]] = [info[0], info[2]]
 
     with open(args.surface_map_path) as f:

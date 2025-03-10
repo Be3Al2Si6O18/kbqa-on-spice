@@ -10,16 +10,16 @@ import re
 class ParseError(Exception):
     pass
 
-class Parser:
+class SparqlParser:
     def __init__(self):
         pass
     
-    def parse_query(self, query):
+    def parse_sparql(self, query):
         if query.startswith('ASK'):
-            body = query[3:]
-            body_lines = body.strip('} {').split('.')[:-1]
-            triplets = ['(' + ' '.join([self.remove_prefix(elem) for elem in body_line.strip().split(' ')]) + ')' for body_line in body_lines]
-            return '(ASK {})'.format(' '.join(triplets))
+            body = query[3:].strip('} {')
+            body_lines = body.split('.')[:-1]
+            triplets = ['(IS_TURE ' + ' '.join([self.remove_prefix(elem) for elem in body_line.strip().split(' ')]) + ')' for body_line in body_lines]
+            return '(ALL {})'.format(' '.join(triplets))
 
         if query.startswith('SELECT'):
             query = query[6:]
@@ -53,14 +53,14 @@ class Parser:
             subqueries = []
             while query.startswith('WITH'):
                 begin = 6
-                stack = 1
+                depth = 1
                 i = begin
                 while i < len(query):
                     if query[i] == '{':
-                        stack += 1
+                        depth += 1
                     elif query[i] == '}':
-                        stack -= 1
-                        if stack == 0:
+                        depth -= 1
+                        if depth == 0:
                             end = i
                             break
                     i += 1
@@ -69,11 +69,8 @@ class Parser:
                 subqueries.append(subquery)
             s_expr = self.parse_subqueries(subqueries, query)
         elif query.startswith('WHERE'):
-            body = query[6:]
-            if 'UNION' not in body:
-                s_expr = self.parse_naive_body(body, ret_var)
-            else:
-                s_expr = '(OR ' + ' '.join([(self.parse_naive_body(body, ret_var)) for body in body.split(' UNION ')]) + ')'
+            body = query[5:].lstrip()
+            s_expr = self.parse_body(body, ret_var)
         else:
             raise ParseError()
 
@@ -82,7 +79,7 @@ class Parser:
         
         return s_expr
         
-    def parse_subqueries(self, subqueries, filter):
+    def parse_subqueries(self, subqueries, where):
         tupcountfin = self.parse_subquery(subqueries[0])
         if len(subqueries) > 4:
             tupcounts2 = self.parse_subquery(subqueries[2])
@@ -97,43 +94,37 @@ class Parser:
                 raise ParseError()
         
         operator_to_function = {'<': 'LT', '<=': 'LE', '=': 'EQ', '>=': 'GE', '>': 'GT'}
-        pattern = r'FILTER \((.*?) (.*?) (.*?)\)'
-        re_match = re.search(pattern, filter)
-        if re_match:
-            operator = re_match.group(2)
-            if len(subqueries) == 3 or len(subqueries) == 5:
-                num = re_match.group(3)
-            elif len(subqueries) == 2:
-                num_body = re.search(r'SELECT \(COUNT\(\*\) AS \?count\) WHERE {(.*?)}', filter).group(1)
-                num = self.parse_naive_body(num_body, '?w')
+        filter_match = re.search(r'FILTER \((.*?) (.*?) (.*?)\)', where)
+        if filter_match:
+            operator = filter_match.group(2)
+            count_match = re.search(r'SELECT \(COUNT\(\*\) AS \?count\) WHERE(.*)', where)
+            if count_match:
+                count_body = count_match.group(1).lstrip()
+                num = self.parse_body(count_body, '?w')
             else:
-                raise ParseError()
+                num = filter_match.group(3)
             return '({} {} {})'.format(operator_to_function[operator], tupcountfin, num)
         else:
             return tupcountfin
     
     def parse_subquery(self, subquery):
         self.parse_assert(subquery.startswith('SELECT'))
-        subquery = subquery[6:]
-        subquery = subquery.lstrip()
+        subquery = subquery[6:].lstrip()
         
         if subquery.startswith('?x'):
-            subquery = subquery[2:]
             ret_var = '?x'
         elif subquery.startswith('?y'):
-            subquery = subquery[2:]
             ret_var = '?y'
         else:
             raise ParseError()
-        subquery = subquery.lstrip()
+        subquery = subquery[2:].lstrip()
 
         self.parse_assert(subquery.startswith('(COUNT(*) AS ?tupcount)'))
-        subquery = subquery[23:]
-        subquery = subquery.lstrip()
+        subquery = subquery[23:].lstrip()
 
         self.parse_assert(subquery.startswith('WHERE'))
-        body = subquery[6:]
-        s_expr = '(GROUP_COUNT {})'.format(self.parse_naive_body(body, ret_var))
+        body = subquery[5:-11].lstrip()
+        s_expr = '(GROUP_COUNT {})'.format(self.parse_body(body, ret_var))
         return s_expr
     
     def remove_prefix(self, elem):
@@ -144,13 +135,54 @@ class Parser:
         else:
             return elem
 
+    def parse_body(self, body, ret_var):
+        naive_body_list = self.flatten_body(body)
+        if len(naive_body_list) == 1:
+            return self.parse_naive_body(naive_body_list[0], ret_var)
+        else:
+            return '(OR ' + ' '.join([self.parse_naive_body(naive_body, ret_var) for naive_body in naive_body_list]) + ')'
+
+    def flatten_body(self, body) -> list: # body -> [naive_body1, naive_body2, ...] -> (OR expr1 expr2 ... )
+        if body[0] != '{': # body is naive
+            return [body]
+        
+        components = []
+        depth = 1
+        begin = 1
+        for i in range(1, len(body)):
+            if body[i] == '{':
+                if depth == 1:
+                    end = i
+                    components.append(body[begin: end])
+                    begin = i
+                depth += 1
+            elif body[i] == '}':
+                depth -= 1
+                if depth == 1:
+                    end = i + 1
+                    components.append(body[begin: end])
+                    begin = i + 1
+                elif depth == 0:
+                    end = i
+                    components.append(body[begin: end])
+
+                    components = [component for component in components if component and not component.isspace()]
+                    if ' UNION ' in components:
+                        naive_body_list = [naive_body for component in components if component != ' UNION ' for naive_body in self.flatten_body(component)]
+                    else:
+                        naive_body_list = ['']
+                        for component in components:
+                            naive_body_list = [naive_body + new_naive_body for naive_body in naive_body_list for new_naive_body in self.flatten_body(component)]
+                    return naive_body_list
+        raise ParseError()
+
     def parse_naive_body(self, body, ret_var):
         body_lines = body.strip('} {').split('.')[:-1]
 
         def split_body_line(body_line):
             body_line = body_line.strip()
             if body_line.startswith('VALUES ?y'):
-                values = ' '.join([self.remove_prefix(value) for value in body_line[12:-2].split(' ')])
+                values = ' '.join([self.remove_prefix(value) for value in body_line.lstrip()[9:].strip().split(' ')])
                 triplet = ['?y', 'VALUES', values]
             else:
                 triplet = [self.remove_prefix(elem) for elem in body_line.split(' ')]
@@ -158,7 +190,7 @@ class Parser:
         
         diff = None
         if body_lines[-1].lstrip().startswith('FILTER NOT EXISTS'):
-            triplet = split_body_line(re.search(r'FILTER NOT EXISTS {(.*)', body_lines.pop()).group(1))
+            triplet = split_body_line(body_lines.pop().lstrip()[17:])
             diff = self.triplet_to_clause('?x', triplet, {})
             
         triplets = [split_body_line(body_line) for body_line in body_lines]
@@ -238,7 +270,7 @@ class Parser:
             raise ParseError()
 
 if __name__ == '__main__':
-    parser = Parser()
+    parser = SparqlParser()
     examples  = [
         'SELECT ?x WHERE { wd:Q35 wdt:P361 ?x . ?x wdt:P31 wd:Q2221906 .  }',
         'SELECT ?x WHERE { { wd:Q12060361 wdt:P17 ?x . ?x wdt:P31 wd:Q1048835 .  } UNION { wd:Q5394403 wdt:P27 ?x . ?x wdt:P31 wd:Q1048835 .  } }',
@@ -251,12 +283,13 @@ if __name__ == '__main__':
         'SELECT (COUNT(*) AS ?result) WITH { SELECT  ?x (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P530 ?y . ?x wdt:P31 wd:Q15617994 . ?y wdt:P31 wd:Q15617994 .  } GROUP BY ?x }  AS %tupcounts  WITH { SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { { { ?x wdt:P530 ?b . ?x wdt:P31 wd:Q15617994 .  } } FILTER NOT EXISTS { ?x wdt:P530 ?y . ?x wdt:P31 wd:Q15617994 . ?y wdt:P31 wd:Q15617994 .  } } } AS %zerotupcounts  WITH { SELECT ?x ?tupcount WHERE { { SELECT ?x ?tupcount WHERE { INCLUDE %tupcounts } } UNION { SELECT ?x ?tupcount WHERE { INCLUDE %zerotupcounts } } } } AS %TuplesCounts  WHERE  { INCLUDE %TuplesCounts . FILTER (?tupcount > 0) }',
         'SELECT  ?x  WITH { SELECT  ?x (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P1441 ?y . ?x wdt:P31 wd:Q3895768 . ?y wdt:P31 wd:Q2342494 .  } GROUP BY ?x }  AS %tupcounts  WITH { SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { { { ?x wdt:P1441 ?b . ?x wdt:P31 wd:Q3895768 .  } } FILTER NOT EXISTS { ?x wdt:P1441 ?y . ?x wdt:P31 wd:Q3895768 . ?y wdt:P31 wd:Q2342494 .  } } } AS %zerotupcounts  WITH { SELECT ?x ?tupcount WHERE { { SELECT ?x ?tupcount WHERE { INCLUDE %tupcounts } } UNION { SELECT ?x ?tupcount WHERE { INCLUDE %zerotupcounts } } } } AS %TuplesCounts  WITH { SELECT (MAX(?tupcount) AS ?count) WHERE { INCLUDE %TuplesCounts } } AS %maxMinCount  WHERE { INCLUDE %TuplesCounts . INCLUDE %maxMinCount .  FILTER (?tupcount = ?count) } ',
         'SELECT (COUNT(*) AS ?result) WITH { SELECT ?x (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P1441 ?y . ?x wdt:P31 wd:Q502895 . ?y wdt:P31 wd:Q15416 .  } GROUP BY ?x }  AS %tupcounts1  WITH { SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { { { ?x wdt:P1441 ?b . ?x wdt:P31 wd:Q502895 .  } } FILTER NOT EXISTS { ?x wdt:P1441 ?y . ?x wdt:P31 wd:Q502895 . ?y wdt:P31 wd:Q15416 .  } } } AS %zerotupcounts1  WITH { SELECT ?x (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P1441 ?y . ?x wdt:P31 wd:Q502895 . ?y wdt:P31 wd:Q838948 .  } GROUP BY ?x }  AS %tupcounts2 WITH { SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { { { ?x wdt:P1441 ?b . ?x wdt:P31 wd:Q502895 .  } }  FILTER NOT EXISTS { ?x wdt:P1441 ?y . ?x wdt:P31 wd:Q502895 . ?y wdt:P31 wd:Q838948 .  } } } AS %zerotupcounts2 WITH {SELECT ?x (SUM(?tupcount) AS ?tupcountfin) WHERE { { SELECT ?x ?tupcount WHERE { INCLUDE %tupcounts1 } } UNION { SELECT ?x ?tupcount WHERE { INCLUDE %zerotupcounts1 } } UNION { SELECT ?x ?tupcount WHERE { INCLUDE %tupcounts2 } } UNION { SELECT ?x ?tupcount WHERE { INCLUDE %zerotupcounts2 } } } GROUP BY ?x } AS %TuplesCounts  WHERE {INCLUDE %TuplesCounts. FILTER (?tupcountfin > 0) }',
-        'SELECT ?y WITH { SELECT ?y (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q13406554 .  } GROUP BY ?y }  AS %tupcounts1  WITH { SELECT DISTINCT ?y (0 AS ?tupcount) WHERE { { { ?b wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 .  } } FILTER NOT EXISTS { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q13406554 .  } } } AS %zerotupcounts1  WITH { SELECT ?y (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q15275719 .  } GROUP BY ?y }  AS %tupcounts2 WITH { SELECT DISTINCT ?y (0 AS ?tupcount) WHERE { { { ?b wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 .  } }  FILTER NOT EXISTS { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q15275719 .  } } } AS %zerotupcounts2  WITH {  SELECT ?y (SUM(?tupcount) AS ?tupcountfin) WHERE { { SELECT ?y ?tupcount WHERE { INCLUDE %tupcounts1 } } UNION { SELECT ?y ?tupcount WHERE { INCLUDE %zerotupcounts1 } } UNION { SELECT ?y ?tupcount WHERE { INCLUDE %tupcounts2 } } UNION { SELECT ?y ?tupcount WHERE { INCLUDE %zerotupcounts2 } }  } GROUP BY ?y } AS %TuplesCounts  WITH { SELECT (MIN(?tupcountfin) AS ?count) WHERE { INCLUDE %TuplesCounts } } AS %maxMinCount  WHERE { INCLUDE %TuplesCounts . INCLUDE %maxMinCount .  FILTER (?tupcountfin = ?count) }'
+        'SELECT ?y WITH { SELECT ?y (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q13406554 .  } GROUP BY ?y }  AS %tupcounts1  WITH { SELECT DISTINCT ?y (0 AS ?tupcount) WHERE { { { ?b wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 .  } } FILTER NOT EXISTS { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q13406554 .  } } } AS %zerotupcounts1  WITH { SELECT ?y (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q15275719 .  } GROUP BY ?y }  AS %tupcounts2 WITH { SELECT DISTINCT ?y (0 AS ?tupcount) WHERE { { { ?b wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 .  } }  FILTER NOT EXISTS { ?x wdt:P1923 ?y . ?y wdt:P31 wd:Q1194951 . ?x wdt:P31 wd:Q15275719 .  } } } AS %zerotupcounts2  WITH {  SELECT ?y (SUM(?tupcount) AS ?tupcountfin) WHERE { { SELECT ?y ?tupcount WHERE { INCLUDE %tupcounts1 } } UNION { SELECT ?y ?tupcount WHERE { INCLUDE %zerotupcounts1 } } UNION { SELECT ?y ?tupcount WHERE { INCLUDE %tupcounts2 } } UNION { SELECT ?y ?tupcount WHERE { INCLUDE %zerotupcounts2 } }  } GROUP BY ?y } AS %TuplesCounts  WITH { SELECT (MIN(?tupcountfin) AS ?count) WHERE { INCLUDE %TuplesCounts } } AS %maxMinCount  WHERE { INCLUDE %TuplesCounts . INCLUDE %maxMinCount .  FILTER (?tupcountfin = ?count) }',
+        'SELECT ?x WITH { SELECT ?x (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P190 ?y . ?x wdt:P31 wd:Q515 . ?y wdt:P31 wd:Q20667921 .  } GROUP BY ?x }  AS %tupcounts1  WITH { SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { { { ?x wdt:P190 ?b . ?x wdt:P31 wd:Q515 .  } } FILTER NOT EXISTS { ?x wdt:P190 ?y . ?x wdt:P31 wd:Q515 . ?y wdt:P31 wd:Q20667921 .  } } } AS %zerotupcounts1  WITH { SELECT ?x (COUNT(*) AS ?tupcount) WHERE { ?x wdt:P190 ?y . ?x wdt:P31 wd:Q515 . ?y wdt:P31 wd:Q13220204 .  } GROUP BY ?x }  AS %tupcounts2  WITH {  SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { { { ?x wdt:P190 ?b . ?x wdt:P31 wd:Q515 .  } } FILTER NOT EXISTS { ?x wdt:P190 ?y . ?x wdt:P31 wd:Q515 . ?y wdt:P31 wd:Q13220204 .  } }  } AS %zerotupcounts2  WITH {  SELECT ?x (SUM(?tupcount) AS ?tupcountfin)  WHERE { { SELECT ?x ?tupcount WHERE { INCLUDE %tupcounts1 } } UNION { SELECT ?x ?tupcount WHERE { INCLUDE %zerotupcounts1 } }  UNION { SELECT ?x ?tupcount WHERE { INCLUDE %tupcounts2 } }  UNION { SELECT ?x ?tupcount WHERE { INCLUDE %zerotupcounts2 } }  }  GROUP BY ?x  } AS %TuplesCounts  WHERE { INCLUDE %TuplesCounts.  FILTER (?tupcountfin > ?count){SELECT (COUNT(*) AS ?count) WHERE { wd:Q281371 wdt:P190 ?w .  { { ?w wdt:P31 wd:Q20667921 .  } UNION { ?w wdt:P31 wd:Q13220204 .  } } } } } '
     ]
     for query in examples:
         print('--------------------------------')
         print()
         print(query)
         print()
-        print(parser.parse_query(query))
+        print(parser.parse_sparql(query))
         print()

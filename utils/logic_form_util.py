@@ -616,6 +616,7 @@ def _linearize_lisp_expression(expression: list, sub_formula_id):
 
     sub_formulas.append(expression)
     sub_formula_id[0] += 1
+    print(sub_formulas)
     return sub_formulas
 
 
