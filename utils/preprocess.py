@@ -1,5 +1,4 @@
 import os
-import shutil
 import json
 from parse_sparql import *
 
@@ -33,7 +32,7 @@ def generate_train_data(file_path):
         qa["qid"] = dir_name[3:] + '.' + file_name[3:-5] + '.' + str(i // 2)
         qa["question"] = context + question["utterance"] + " [CTX]"
         qa["sparql_query"] = answer["sparql"]
-        qa["question_type"] = question['description'] if 'description' in question else question['question-type']
+        qa["question_type"] = f"{question['question-type']} [{question['description']}]" if 'description' in question else question['question-type']
         try:
             qa["s_expression"] = parser.parse_sparql(answer["sparql"])
         except:
