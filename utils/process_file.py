@@ -3,17 +3,7 @@ import json
 
 def process_file(filename):
     data = json.load(open(filename, 'r'), strict=False)
-    selected_data = []
-    for example in data:
-        sele_dict = {}
-        sele_dict["id"] = example["qid"]
-        sele_dict["question"] = example["question"]
-        sele_dict["sparql_query"] = example["sparql_query"]
-        sele_dict["s_expression"] = example["s_expression"]
-        sele_dict["answer"] = example["answer"]
-        sele_dict["question_type"] = example["question_type"]
-        selected_data.append(sele_dict)
-    return selected_data
+    return data
 
 # question_to_mid_dict[question][mid] = friendly_name
 # 记录了一个问题中所有相关entity的mid，及其对应的friendlyname

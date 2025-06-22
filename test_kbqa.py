@@ -1,22 +1,17 @@
 import openai
 import json
-import spacy
-from utils.sparql_exe import execute_query, get_types, get_2hop_relations, lisp_to_sparql
-from utils.process_file import process_file, process_file_node, process_file_rela, process_file_test
-from rank_bm25 import BM25Okapi
+from utils.process_file import process_file
+from utils.parse_expr import ExprParser
+from utils.execute_query import execute_query
+from utils.utils import *
 from time import sleep
 import re
+import os
 import logging
 from collections import Counter
 import argparse
-# from pyserini.search.faiss import FaissSearcher
-# from pyserini.search.lucene import LuceneSearcher
-# from pyserini.search.hybrid import HybridSearcher
-# from pyserini.encode import AutoQueryEncoder
 import random
-import itertools
-import pickle
-
+from retriever.semantic_retriever import semantic_search
 
 logging.getLogger().setLevel(logging.INFO)
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s',
@@ -59,16 +54,27 @@ def select_shot_prompt_train(train_data_in, shot_number):
     return selected_quest
 
 # 把string中的mid替换为friendly name, 调用时, 这里的string为prompt中的s_expression
-def sub_mid_to_fn(string, wikidata_mid_to_fn_dict):
-    seg_list = string.split()
+def sub_mid_to_fn(expression, wikidata_mid_to_fn_dict):
+    seg_list = expression.split()
     for i in range(len(seg_list)):
         token = seg_list[i].strip(')(')
         if token.startswith('P') or token.startswith('Q'):
             fn = wikidata_mid_to_fn_dict.get(token, "unknown_entity")
             seg_list[i] = seg_list[i].replace(token, fn)
-    new_string = ' '.join(seg_list)
-    return new_string
+    new_expression = ' '.join(seg_list)
+    return new_expression
 
+def sub_fn_to_mid(expression):
+    func_list = ['R', 'JOIN', 'AND', 'OR', 'DIFF', 'VALUES', 'DISTINCT', 'COUNT', 'GROUP_COUNT', 'GROUP_SUM', 'LT', 'LE', 'EQ', 'GE', 'GT', 'ARGMIN', 'ARGMAX', 'ALL', 'IS_TRUE']
+    seg_list = expression.split()
+    for i in range(len(seg_list)):
+        token = seg_list[i].strip(')(')
+        if token not in func_list and not token.isdigit():
+            dis, mid, fn = semantic_search(token)[0]
+            logger.info("linking: {} {}".format(fn, mid))
+            seg_list[i] = seg_list[i].replace(token, mid)
+    new_expression = ' '.join(seg_list)
+    return new_expression
 
 def type_generator(question, prompt_type, api_key, LLM_engine):
     sleep(1)
@@ -107,9 +113,8 @@ def type_generator(question, prompt_type, api_key, LLM_engine):
     return gene_type
 
 
-def ep_generator(question, selected_examples, temp, que_to_s_dict_train, wikidata_mid_to_fn_dict, api_key, LLM_engine,
-                 retrieval=False, corpus=None, nlp_model=None, bm25_train_full=None, retrieve_number=100):
-    prompt = ""
+def ep_generator(question, selected_examples, temp, que_to_s_dict_train, wikidata_mid_to_fn_dict, api_key, LLM_engine):
+    messages = [{'role': 'system', 'content': "Convert the given question into a precise S-expression logical form, strictly following the syntax and structure of the examples provided. Do not include any explanations or additional text in your response."}]
 #     prompt = r"""
 # Next, please transform the problems into logical forms. The logical forms here are composed of the following functions:
 # (JOIN predicate object), which returns a set consisting of all subjects for which the (subject, predicate, object) triple is true. The sets here and below may contain duplicate elements.
@@ -130,33 +135,22 @@ def ep_generator(question, selected_examples, temp, que_to_s_dict_train, wikidat
     for que in selected_examples:
         if not que_to_s_dict_train[que]:
             continue
-        prompt = prompt + "Question: " + que + "\n" + "Logical Form: " + sub_mid_to_fn(que_to_s_dict_train[que], wikidata_mid_to_fn_dict) + "\n"
+        messages.append({'role': 'user', 'content': que})
+        messages.append({'role': 'assistant', 'content': sub_mid_to_fn(que_to_s_dict_train[que], wikidata_mid_to_fn_dict)})
+    messages.append({'role': 'user', 'content': question})
+
     got_result = False
     while got_result != True:
         try:
             openai.api_key = api_key
             resp = openai.chat.completions.create(
                 model=LLM_engine,
-                messages=[
-                    {
-                        'role': 'assistant',
-                        'content': prompt
-                    },
-                    {
-                        'role': 'user',
-                        'content': "Question: " + question + "\n" + "Logical Form: "
-                    },
-                    {
-                        'role': 'user',
-                        'content': "complete the logical form. Only give the expression directly without any explanation or clarification"
-                    }
-                ],
+                messages=messages,
                 temperature=temp,
                 max_tokens=256,
                 top_p=1,
                 frequency_penalty=0,
-                presence_penalty=0,
-                n=7
+                presence_penalty=0
             )
             got_result = True
         except:
@@ -177,27 +171,21 @@ def struct_of_exp(exp):
             ans.append('x')
     return ans
 
-def freebase_mid_to_fn(mids, freebase_mid_to_fn_dict):
-    ans = []
-    for mid in mids:
-        key = "/m/" + mid[2:]
-        if key in freebase_mid_to_fn_dict:
-            ans.append(freebase_mid_to_fn_dict[key])
-    return ans if ans else None
-
 def all_combiner_evaluation(data_batch, selected_quest, prompt_type,
                             temp, que_to_s_dict_train, wikidata_mid_to_fn_dict,
-                            api_key, LLM_engine, retrieval=False, corpus=None, nlp_model=None, bm25_train_full=None, retrieve_number=100):
+                            expr_parser,
+                            api_key, LLM_engine, exp_name):
     correct_exp = 0
     total_exp = 0
     correct_exp_set = set()
-    for data in data_batch:
+    all_results = []
+    for qa in data_batch:
         logger.info("==========")
-        logger.info("data[id]: {}".format(data["id"]))
-        logger.info("data[question]: {}".format(data["question"]))
-        logger.info("data[exp]: {}".format(sub_mid_to_fn(data["s_expression"], wikidata_mid_to_fn_dict)))
+        logger.info("data[id]: {}".format(qa["turnID"]))
+        logger.info("data[question]: {}".format(qa["question"]))
+        logger.info("data[exp]: {}".format(sub_mid_to_fn(qa["s_expression"], wikidata_mid_to_fn_dict)))
 
-        gene_type = type_generator(data["question"], prompt_type, api_key, LLM_engine)
+        gene_type = type_generator(qa["question"], prompt_type, api_key, LLM_engine)
         logger.info("gene_type: {}".format(gene_type))
 
         if gene_type == 'verify':
@@ -205,31 +193,44 @@ def all_combiner_evaluation(data_batch, selected_quest, prompt_type,
         else:
             selected_examples = list(set(selected_quest[gene_type]) | set(selected_quest['mix']))
 
-        gene_exps = ep_generator(data["question"], selected_examples,
+        gene_exps = ep_generator(qa["question"], selected_examples,
                                     temp, que_to_s_dict_train, wikidata_mid_to_fn_dict,
-                                    api_key, LLM_engine,
-                                    retrieval=retrieval, corpus=corpus, nlp_model=nlp_model,
-                                    bm25_train_full=bm25_train_full, retrieve_number=retrieve_number)
+                                    api_key, LLM_engine)     
 
-        scouts = gene_exps[:6]       
-
-        for idx, gene_exp in enumerate(scouts):
+        for idx, gene_exp in enumerate(gene_exps):
+            total_exp += 1
             # logger.info("================================================================")
             logger.info("gene_exp: {}".format(gene_exp))
             
-            if struct_of_exp(gene_exp) == struct_of_exp(data["s_expression"]):
-                logger.info("correct")
+            if struct_of_exp(gene_exp) == struct_of_exp(qa["s_expression"]):
+                logger.info("correct structure")
                 correct_exp += 1
                 correct_exp_set.add(gene_exp)
             else:
-                logger.info("wrong")
-            total_exp += 1
+                logger.info("wrong structure")
+            
+            expr = sub_fn_to_mid(gene_exp)
+            logger.info("S-expression: {}".format(expr))
+            try:
+                sparql = expr_parser.parse_expr(expr)
+                logger.info("SPARQL: {}".format(sparql))
+            except:
+                sparql = ''
+                logger.info("Fail to parse: {}".format(expr))
+            # try:
+            #     results = execute_query(sparql)
+            #     logger.info("Query results: {}".format(results))
+            # except:
+            #     logger.info("Fail to query: {}".format(expr))
+            #     continue
+            qa['actions'] = clean_prediction(sparql)
+            all_results.append(qa)
+    
+    os.makedirs(f'output/{exp_name}', exist_ok=True)
+    dump_json(all_results, f'output/{exp_name}/prediction.json')
 
     print(f"correct_exp: {correct_exp}")
     print(f"total_exp: {total_exp}")
-    with open('data/correct_exp.txt', 'w') as f:
-        for exp in correct_exp_set:
-            print(exp, file=f)
 
 def parse_args():
     parser = argparse.ArgumentParser(allow_abbrev=False)
@@ -247,15 +248,9 @@ def parse_args():
                         default="data/GrailQA/grailqa_v1.0_train.json", help='training data path')
     parser.add_argument('--eva_data_path', type=str, metavar='N',
                         default="data/GrailQA/grailqa_v1.0_dev.json", help='evaluation data path')
-    parser.add_argument('--fb_roles_path', type=str, metavar='N',
-                        default="data/GrailQA/fb_roles", help='freebase roles file path')
-    parser.add_argument('--surface_map_path', type=str, metavar='N',
-                        default="data/surface_map_file_freebase_complete_all_mention", help='surface map file path')
-    parser.add_argument('--freebase_map_path', type=str, metavar='N',
-                        default="data/mid2name.txt", help='freebase mid to friendly name file path')
-    parser.add_argument('--wikidata_map_path', type=str, metavar='N',
-                        default="data/SPICE/expansion_vocab.json", help='wikidata mid to friendly name file path')
-
+    parser.add_argument('--exp_name', type=str, metavar='N',
+                        default="test", help='experiment name')
+    
     args = parser.parse_args()
     return args
 
@@ -263,11 +258,11 @@ def main():
     openai.base_url = 'http://222.29.156.145:8000/v1/'
     # openai.base_url = 'https://api.deepseek.com'
     args = parse_args()
-    nlp = spacy.load("en_core_web_sm")
     dev_data = process_file(args.eva_data_path)
     train_data = process_file(args.train_data_path)
     que_to_s_dict_train = {data["question"]: data["s_expression"] for data in train_data}
     
+    logger.info("selecting prompt...")
     selected_quest = select_shot_prompt_train(train_data, args.shot_num)
 
     prompt_type = ''
@@ -276,20 +271,14 @@ def main():
             for que in selected_quest[quest_type]:
                 prompt_type = prompt_type + "Question: " + que + "\nType of the question: " + quest_type + "\n"
 
-    corpus = [data["question"] for data in train_data]
-    tokenized_train_data = []
-    for doc in corpus:
-        nlp_doc = nlp(doc)
-        tokenized_train_data.append([token.lemma_ for token in nlp_doc])
-    bm25_train_full = BM25Okapi(tokenized_train_data)
+    wikidata_mid_to_fn_dict = load_bin('data/wikidata_mid_to_fn_dict.pickle')
 
-    with open(args.wikidata_map_path, 'rb') as f:
-        wikidata_mid_to_fn_dict = pickle.load(f)
+    expr_parser = ExprParser()
 
     all_combiner_evaluation(dev_data, selected_quest, prompt_type,
                             args.temperature, que_to_s_dict_train, wikidata_mid_to_fn_dict,
-                            args.api_key, args.engine, retrieval=args.retrieval, corpus=corpus, nlp_model=nlp,
-                            bm25_train_full=bm25_train_full, retrieve_number=args.shot_num)
+                            expr_parser,
+                            args.api_key, args.engine, args.exp_name)
 
 if __name__=="__main__":
     main()

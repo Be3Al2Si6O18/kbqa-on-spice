@@ -15,11 +15,13 @@ class SparqlParser:
         pass
     
     def parse_sparql(self, query):
+        self.s_expression_cores = []
+
         if query.startswith('ASK'):
             body = query[3:].strip('} {')
             body_lines = body.split('.')[:-1]
-            triplets = ['(IS_TURE ' + ' '.join([self.remove_prefix(elem) for elem in body_line.strip().split(' ')]) + ')' for body_line in body_lines]
-            return '(ALL {})'.format(' '.join(triplets))
+            self.s_expression_cores = ['(IS_TRUE ' + ' '.join([self.remove_prefix(elem) for elem in body_line.strip().split(' ')]) + ')' for body_line in body_lines]
+            return '(ALL {})'.format(' '.join(self.s_expression_cores))
 
         if query.startswith('SELECT'):
             query = query[6:]
@@ -211,9 +213,10 @@ class SparqlParser:
         self.parse_assert(len(triplets_pool) == 0)
 
         s_expr = self.dep_graph_to_s_expr(var_dep_list, ret_var)
+        self.s_expression_cores.append(s_expr)
         if diff:
             s_expr = '(DIFF {} {})'.format(s_expr, diff)
-
+            self.s_expression_cores.append(diff)
         return s_expr
     
     def resolve_dependancy(self, triplets, target_var, successors):
@@ -292,4 +295,6 @@ if __name__ == '__main__':
         print(query)
         print()
         print(parser.parse_sparql(query))
+        print()
+        print(parser.s_expression_cores)
         print()

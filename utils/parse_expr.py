@@ -1,209 +1,266 @@
 from typing import List
 import copy
+import re
 
 class ParseError(Exception):
     pass
 
-class ExprParser:
-    def __init__(self):
-        pass
+def get_template_and_replacements(s_expression, cores):
+    variables = {}
+    constants = {}
+    functions = {}
 
-    def parse_expr(self, lisp_program: str):
-        nested_expression = self.lisp_to_nested_expression(lisp_program)
-        return self.nested_expression_to_sparql(nested_expression)
+    for i, core in enumerate(cores):
+        s_expression = s_expression.replace(core, f'x{i}')
 
-    def lisp_to_nested_expression(self, lisp_string: str) -> List:
-        """
-        Takes a logical form as a lisp string and returns a nested list representation of the lisp.
-        For example, "(count (division first))" would get mapped to ['count', ['division', 'first']].
-        """
-        stack: List = []
-        current_expression: List = []
-        tokens = lisp_string.split()
-        for token in tokens:
-            while token[0] == '(':
-                nested_expression: List = []
-                current_expression.append(nested_expression)
-                stack.append(current_expression)
-                current_expression = nested_expression
-                token = token[1:]
-            current_expression.append(token.replace(')', ''))
-            while token[-1] == ')':
-                current_expression = stack.pop()
-                token = token[:-1]
-        return current_expression[0]
+        for function in ['LT', 'LE', 'EQ', 'GE', 'GT']:
+            if function in s_expression:
+                s_expression = s_expression.replace(function, 'compare')
+                functions['compare'] = function
+                break
+        for function in ['ARGMIN', 'ARGMAX']:
+            if function in s_expression:
+                s_expression = s_expression.replace(function, 'optimize')
+                functions['optimize'] = function
+                break
 
-    def nested_expression_to_sparql(self, expression):
-        # print(expression)
+        match = re.search(r' (\d+)', s_expression)
+        if match:
+            number = match.group(1)
+            constants['number'] = int(number)
+            s_expression = re.sub(r' \d+', ' number', s_expression)
+    
+    matches = [(match.start(), match.end()) for match in re.finditer(r'x\d', s_expression)]
+    i = len(matches)
+    for start, end in reversed(matches):
+        var = f'x{i}'
+        j = int(s_expression[end - 1])
+        s_expression = s_expression[:start] + var + s_expression[end:]
+        variables[var] = j
+        i -= 1
+    template = s_expression
 
-        select = 'SELECT ?x '
-        if expression[0] == 'COUNT':
-            select = select.replace('?x', '(COUNT(?x) AS ?count)')
-            expression = expression[1]
-        if expression[0] == 'DISTINCT':
-            select = select.replace('?x', 'DISTINCT ?x')
-            expression = expression[1]
+    return template, {"variables": variables, "constants": constants, "functions": functions}
 
-        if expression[0] in ['JOIN', 'AND', 'OR', 'DIFF']:
-            body = self.generate_body(expression)
-            return select + 'WHERE { ' + body + ' }'
-        
-        elif expression[0] in ['GROUP_COUNT', 'GROUP_SUM']:
-            subqueries = self.generate_subqueries(expression)
-            return select + subqueries + ' WHERE { INCLUDE %TuplesCounts }'
-        
-        elif expression[0] in ['LT', 'LE', 'EQ', 'GE', 'GT']:
-            function_to_operator = {'LT': '<', 'LE': '<=', 'EQ': '=', 'GE': '>=', 'GT': '>'}
-            operator = function_to_operator[expression[0]]
-            subqueries = self.generate_subqueries(expression[1])
-            if isinstance(expression[2], list):
-                count_body = self.generate_body(expression[2])
-                subqueries += ' WITH { SELECT (COUNT(*) AS ?count) WHERE { ' + count_body + ' } } AS %Count'
-                return select + subqueries + ' WHERE { INCLUDE %TuplesCounts . INCLUDE %Count . FILTER (?tupcountfin ' + operator + ' ?count) }'
-            else:
-                return select + subqueries + ' WHERE { INCLUDE %TuplesCounts . FILTER (?tupcountfin ' + operator + ' ' + expression[2] + ') }'
-        
-        elif expression[0] in ['ARGMAX', 'ARGMIN']:
-            arg = 'MAX' if expression[0] == 'ARGMAX' else 'MIN'
-            subqueries = self.generate_subqueries(expression[1], arg)
-            return select + subqueries + ' WHERE { INCLUDE %TuplesCounts . INCLUDE %maxMinCount . FILTER (?tupcountfin = ?count) }'
-        
-        elif expression[0] == 'ALL':
-            return 'ASK { ' + ' '.join([f'wd:{triplets[1]} wdt:{triplets[2]} wd:{triplets[3]} .' for triplets in expression[1:]]) + ' }'
-        
+def get_simple_question_type(template):
+    if template.startswith('(ALL'):
+        return 'verify'
+    if template.startswith('(optimize'):
+        return 'optimize'
+    if template.startswith('(COUNT (compare'):
+        return 'compare_and_count'
+    if template.startswith('(compare'):
+        return 'compare'
+    if template.startswith('(COUNT'):
+        return 'count'
+    return 'simple'
+
+def expression_to_sparql(lisp_program: str):
+    try:
+        nested_expression = expression_to_nested_expression(lisp_program)
+        sparql =  nested_expression_to_sparql(nested_expression)
+        return sparql
+    except:
+        return ''
+
+def expression_to_nested_expression(lisp_string: str) -> List:
+    """
+    Takes a logical form as a lisp string and returns a nested list representation of the lisp.
+    For example, "(count (division first))" would get mapped to ['count', ['division', 'first']].
+    """
+    stack: List = []
+    current_expression: List = []
+    tokens = lisp_string.split()
+    for token in tokens:
+        while token[0] == '(':
+            nested_expression: List = []
+            current_expression.append(nested_expression)
+            stack.append(current_expression)
+            current_expression = nested_expression
+            token = token[1:]
+        current_expression.append(token.replace(')', ''))
+        while token[-1] == ')':
+            current_expression = stack.pop()
+            token = token[:-1]
+    return current_expression[0]
+
+def nested_expression_to_sparql(expression):
+    # print(expression)
+
+    select = 'SELECT ?x '
+    if expression[0] == 'COUNT':
+        select = select.replace('?x', '(COUNT(?x) AS ?count)')
+        expression = expression[1]
+    if expression[0] == 'DISTINCT':
+        select = select.replace('?x', 'DISTINCT ?x')
+        expression = expression[1]
+
+    if expression[0] in ['JOIN', 'AND', 'OR', 'DIFF']:
+        body = generate_body(expression)
+        return select + 'WHERE { ' + body + ' }'
+    
+    elif expression[0] in ['GROUP_COUNT', 'GROUP_SUM']:
+        subqueries = generate_subqueries(expression)
+        return select + subqueries + ' WHERE { INCLUDE %TuplesCounts }'
+    
+    elif expression[0] in ['LT', 'LE', 'EQ', 'GE', 'GT']:
+        function_to_operator = {'LT': '<', 'LE': '<=', 'EQ': '=', 'GE': '>=', 'GT': '>'}
+        operator = function_to_operator[expression[0]]
+        subqueries = generate_subqueries(expression[1])
+        if isinstance(expression[2], list):
+            count_body = generate_body(expression[2])
+            subqueries += ' WITH { SELECT (COUNT(*) AS ?count) WHERE { ' + count_body + ' } } AS %Count'
+            return select + subqueries + ' WHERE { INCLUDE %TuplesCounts . INCLUDE %Count . FILTER (?tupcountfin ' + operator + ' ?count) }'
         else:
-            raise ParseError()
+            return select + subqueries + ' WHERE { INCLUDE %TuplesCounts . FILTER (?tupcountfin ' + operator + ' ' + expression[2] + ') }'
+    
+    elif expression[0] in ['ARGMAX', 'ARGMIN']:
+        arg = 'MAX' if expression[0] == 'ARGMAX' else 'MIN'
+        subqueries = generate_subqueries(expression[1], arg)
+        return select + subqueries + ' WHERE { INCLUDE %TuplesCounts . INCLUDE %maxMinCount . FILTER (?tupcountfin = ?count) }'
+    
+    elif expression[0] == 'ALL':
+        return 'ASK { ' + ' '.join([f'wd:{triplets[1]} wdt:{triplets[2]} wd:{triplets[3]} .' for triplets in expression[1:]]) + ' }'
 
-    def generate_body(self, expression, zerotupcounts=False):
+    elif expression[0] == 'IS_TRUE':
+        return 'ASK { ' + f'wd:{expression[1]} wdt:{expression[2]} wd:{expression[3]} .' + ' }'
+    
+    else:
+        raise ParseError()
 
-        def linearize_lisp_expression(expression: list, sub_formula_id):
-            expression = copy.deepcopy(expression)
-            sub_formulas = []
-            for i, e in enumerate(expression):
-                if isinstance(e, list) and e[0] != 'R':
-                    sub_formulas.extend(linearize_lisp_expression(e, sub_formula_id))
-                    expression[i] = '#' + str(sub_formula_id[0] - 1)
+def generate_body(expression, zerotupcounts=False):
 
-            sub_formulas.append(expression)
-            sub_formula_id[0] += 1
-            return sub_formulas
-        
-        if expression[0] == 'DIFF':
-            body1, body2 = self.generate_body(expression[1]), self.generate_body(expression[2])
-            return body1 + ' FILTER NOT EXISTS { ' + body2 + ' }'
-        
-        elif expression[0] == 'OR':
-            return '{ '+ ' } UNION { '.join([self.generate_body(sub_expression) for sub_expression in expression[1:]]) + ' }'
-        
-        elif expression[0] in ['JOIN', 'AND']:
-            sub_programs = linearize_lisp_expression(expression, [0])
+    def linearize_lisp_expression(expression: list, sub_formula_id):
+        expression = copy.deepcopy(expression)
+        sub_formulas = []
+        for i, e in enumerate(expression):
+            if isinstance(e, list) and e[0] != 'R':
+                sub_formulas.extend(linearize_lisp_expression(e, sub_formula_id))
+                expression[i] = '#' + str(sub_formula_id[0] - 1)
 
-            clauses = []
-            identical_variables_r = {}  # key should be larger than value
-            question_var = len(sub_programs) - 1
+        sub_formulas.append(expression)
+        sub_formula_id[0] += 1
+        return sub_formulas
+    
+    if expression[0] == 'DIFF':
+        body1, body2 = generate_body(expression[1]), generate_body(expression[2])
+        return body1 + ' FILTER NOT EXISTS { ' + body2 + ' }'
+    
+    elif expression[0] == 'OR':
+        while isinstance(expression[1], list) and expression[1][0] == 'OR':
+            expression[1: 2] = expression[1][1:]
+        return '{ '+ ' } UNION { '.join([generate_body(sub_expression) for sub_expression in expression[1:]]) + ' }'
+    
+    elif expression[0] in ['JOIN', 'AND']:
+        sub_programs = linearize_lisp_expression(expression, [0])
 
-            def get_root(var: int):
-                while var in identical_variables_r:
-                    var = identical_variables_r[var]
-                return var
+        clauses = []
+        identical_variables_r = {}  # key should be larger than value
+        question_var = len(sub_programs) - 1
 
-            for i, subp in enumerate(sub_programs):
-                i = str(i)
-                if subp[0] == 'JOIN':
-                    if isinstance(subp[1], list):  # R relation
-                        if subp[2][0] in ["P", "Q"]:  # entity
-                            clauses.append("wd:" + subp[2] + " wdt:" + subp[1][1] + " ?x" + i + " .")
-                        elif subp[2][0] == '#':  # variable
-                            clauses.append("?x" + subp[2][1:] + " wdt:" + subp[1][1] + " ?x" + i + " .")
-                        else:
-                            raise ParseError()
+        def get_root(var: int):
+            while var in identical_variables_r:
+                var = identical_variables_r[var]
+            return var
+
+        for i, subp in enumerate(sub_programs):
+            i = str(i)
+            if subp[0] == 'JOIN':
+                if isinstance(subp[1], list):  # R relation
+                    if subp[2][0] in ["P", "Q"]:  # entity
+                        clauses.append("wd:" + subp[2] + " wdt:" + subp[1][1] + " ?x" + i + " .")
+                    elif subp[2][0] == '#':  # variable
+                        clauses.append("?x" + subp[2][1:] + " wdt:" + subp[1][1] + " ?x" + i + " .")
+                    elif subp[2][:2] == '?t': # type
+                        clauses.append(subp[2] + " wdt:" + subp[1][1] + " ?x" + i + " .")
                     else:
-                        if subp[2][0] in ["P", "Q"]:  # entity
-                            clauses.append("?x" + i + " wdt:" + subp[1] + " wd:" + subp[2] + " .")
-
-                        elif subp[2][0] == '#':  # variable
-                            clauses.append("?x" + i + " wdt:" + subp[1] + " ?x" + subp[2][1:] + " .")
-                        else:
-                            raise ParseError()
-                elif subp[0] == 'AND':
-                    root_this = get_root(int(i))
-                    for var in subp[1:]:
-                        self.parse_assert(var[0] == "#")
-                        root_var = get_root(int(var[1:]))
-                        if root_this > root_var:
-                            identical_variables_r[root_this] = root_var
-                            root_this = root_var
-                        else:
-                            identical_variables_r[root_var] = root_this
-                elif subp[0] == 'VALUES':
-                    clauses.append('VALUES ?x' + i + ' { ' + ' '.join([f'wd:{value}' for value in subp[1:]]) + ' } .')
+                        raise ParseError()
                 else:
-                    raise ParseError()
-            
-            question_var = get_root(question_var)
-
-            for i in range(len(clauses)):
-                for k in identical_variables_r:
-                    clauses[i] = clauses[i].replace(f'?x{k} ', f'?x{get_root(k)} ')
-                clauses[i] = clauses[i].replace(f'?x{question_var} ', f'?x ')
-            
-            if zerotupcounts:
-                for i in range(len(clauses)):
-                    for j in range(len(sub_programs)):
-                        if j != question_var:
-                            clauses[i] = clauses[i].replace(f'?x{j} ', f'?b{j} ')
-                clauses = [clauses[i] for i in range(len(clauses)) if '?x ' in clauses[i]]
-            
-            return ' '.join(clauses)
-        else:
-            raise ParseError()
-
-    def generate_subqueries(self, expression, arg=None):
-
-        def generate_tupcounts(expression):
-            self.parse_assert(expression[0] == 'GROUP_COUNT')
-            tupcounts_body = self.generate_body(expression[1])
-            zerotupcounts_body = self.generate_body(expression[1], zerotupcounts=True)
-            tupcounts = 'WITH { SELECT ?x (COUNT(*) AS ?tupcount) WHERE { ' + tupcounts_body + ' } GROUP BY ?x } AS %tupcounts'
-            zerotupcounts = 'WITH { SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { ' + zerotupcounts_body + ' FILTER NOT EXISTS { ' + tupcounts_body + ' } } } AS %zerotupcounts'
-            return [tupcounts, zerotupcounts]
-
-        def generate_TuplesCounts(tupcounts_dict, sum=False):
-            body = ' UNION '.join(['{ SELECT ?x ?tupcount WHERE { INCLUDE %' + tupcounts.split('%')[1] + ' } }' for tupcounts in tupcounts_dict])
-            if sum:
-                return 'WITH { SELECT ?x (SUM(?tupcount) AS ?tupcountfin) WHERE { ' + body + ' } GROUP BY ?x } AS %TuplesCounts'
+                    if subp[2][0] in ["P", "Q"]:  # entity
+                        clauses.append("?x" + i + " wdt:" + subp[1] + " wd:" + subp[2] + " .")
+                    elif subp[2][0] == '#':  # variable
+                        clauses.append("?x" + i + " wdt:" + subp[1] + " ?x" + subp[2][1:] + " .")
+                    elif subp[2][:2] == '?t': # type
+                        clauses.append("?x" + i + " wdt:" + subp[1] + " " + subp[2] + " .")
+                    else:
+                        raise ParseError()
+            elif subp[0] == 'AND':
+                root_this = get_root(int(i))
+                for var in subp[1:]:
+                    parse_assert(var[0] == "#")
+                    root_var = get_root(int(var[1:]))
+                    if root_this > root_var:
+                        identical_variables_r[root_this] = root_var
+                        root_this = root_var
+                    else:
+                        identical_variables_r[root_var] = root_this
+            elif subp[0] == 'VALUES':
+                clauses.append('VALUES ?x' + i + ' { ' + ' '.join([f'wd:{value}' for value in subp[1:]]) + ' } .')
             else:
-                return 'WITH { SELECT ?x (?tupcount AS ?tupcountfin) WHERE { ' + body + ' } } AS %TuplesCounts'
+                raise ParseError()
         
-        def generate_maxMinCount(arg):
-            return 'WITH { SELECT (' + arg + '(?tupcountfin) AS ?count) WHERE { INCLUDE %TuplesCounts } } AS %maxMinCount'
+        question_var = get_root(question_var)
+
+        for i in range(len(clauses)):
+            for k in identical_variables_r:
+                clauses[i] = clauses[i].replace(f'?x{k} ', f'?x{get_root(k)} ')
+            clauses[i] = clauses[i].replace(f'?x{question_var} ', f'?x ')
         
-        subqueries = []
+        if zerotupcounts:
+            for i in range(len(clauses)):
+                for j in range(len(sub_programs)):
+                    if j != question_var:
+                        clauses[i] = clauses[i].replace(f'?x{j} ', f'?b{j} ')
+            clauses = [clauses[i] for i in range(len(clauses)) if '?x ' in clauses[i]]
+        
+        return ' '.join(clauses)
+    else:
+        raise ParseError()
 
-        if expression[0] == 'GROUP_COUNT':
-            subqueries = generate_tupcounts(expression)
-            subqueries.append(generate_TuplesCounts(subqueries))
+def generate_subqueries(expression, arg=None):
 
-        elif expression[0] == 'GROUP_SUM':
-            tupcounts1, zerotupcounts1 = generate_tupcounts(expression[1])
-            tupcounts2, zerotupcounts2 = generate_tupcounts(expression[2])
-            subqueries = [tupcounts1 + '1', zerotupcounts1 + '1', tupcounts2 + '2', zerotupcounts2 + '2']
-            subqueries.append(generate_TuplesCounts(subqueries, sum=True))
+    def generate_tupcounts(expression):
+        parse_assert(expression[0] == 'GROUP_COUNT')
+        tupcounts_body = generate_body(expression[1])
+        zerotupcounts_body = generate_body(expression[1], zerotupcounts=True)
+        tupcounts = 'WITH { SELECT ?x (COUNT(*) AS ?tupcount) WHERE { ' + tupcounts_body + ' } GROUP BY ?x } AS %tupcounts'
+        zerotupcounts = 'WITH { SELECT DISTINCT ?x (0 AS ?tupcount) WHERE { ' + zerotupcounts_body + ' FILTER NOT EXISTS { ' + tupcounts_body + ' } } } AS %zerotupcounts'
+        return [tupcounts, zerotupcounts]
+
+    def generate_TuplesCounts(tupcounts_dict, sum=False):
+        body = ' UNION '.join(['{ SELECT ?x ?tupcount WHERE { INCLUDE %' + tupcounts.split('%')[1] + ' } }' for tupcounts in tupcounts_dict])
+        if sum:
+            return 'WITH { SELECT ?x (SUM(?tupcount) AS ?tupcountfin) WHERE { ' + body + ' } GROUP BY ?x } AS %TuplesCounts'
         else:
-            raise ParseError()
+            return 'WITH { SELECT ?x (?tupcount AS ?tupcountfin) WHERE { ' + body + ' } } AS %TuplesCounts'
+    
+    def generate_maxMinCount(arg):
+        return 'WITH { SELECT (' + arg + '(?tupcountfin) AS ?count) WHERE { INCLUDE %TuplesCounts } } AS %maxMinCount'
+    
+    subqueries = []
 
-        if arg:
-            subqueries.append(generate_maxMinCount(arg))
+    if expression[0] == 'GROUP_COUNT':
+        subqueries = generate_tupcounts(expression)
+        subqueries.append(generate_TuplesCounts(subqueries))
 
-        return ' '.join(subqueries)
+    elif expression[0] == 'GROUP_SUM':
+        tupcounts1, zerotupcounts1 = generate_tupcounts(expression[1])
+        tupcounts2, zerotupcounts2 = generate_tupcounts(expression[2])
+        subqueries = [tupcounts1 + '1', zerotupcounts1 + '1', tupcounts2 + '2', zerotupcounts2 + '2']
+        subqueries.append(generate_TuplesCounts(subqueries, sum=True))
+    else:
+        raise ParseError()
 
-    def parse_assert(self, eval):
-        if not eval:
-            raise ParseError()
+    if arg:
+        subqueries.append(generate_maxMinCount(arg))
+
+    return ' '.join(subqueries)
+
+def parse_assert(eval):
+    if not eval:
+        raise ParseError()
 
 if __name__ == '__main__':
-    parser = ExprParser()
-
     expressions = [
         '(AND (JOIN (R P361) Q35) (JOIN P31 Q2221906))',
         '(OR (AND (JOIN (R P17) Q12060361) (JOIN P31 Q1048835)) (AND (JOIN (R P27) Q5394403) (JOIN P31 Q1048835)))',
@@ -211,7 +268,7 @@ if __name__ == '__main__':
         '(COUNT (DISTINCT (OR (AND (JOIN (R P136) Q26208739) (JOIN P31 Q151885)) (AND (JOIN (R P136) Q5323744) (JOIN P31 Q151885)))))',
         '(DISTINCT (AND (JOIN P355 (VALUES Q7163209 Q5908783 Q1273145)) (JOIN P31 Q43229)))',
         '(DIFF (AND (JOIN P710 Q526275) (JOIN P31 Q1203472)) (JOIN P710 Q1736517))',
-        '(ALL (IS_TURE Q230 P530 Q35) (IS_TURE Q230 P530 Q40) (IS_TURE Q230 P530 Q664))',
+        '(ALL (IS_TRUE Q230 P530 Q35) (IS_TRUE Q230 P530 Q40) (IS_TRUE Q230 P530 Q664))',
         '(GT (GROUP_COUNT (AND (JOIN (R P495) (JOIN P31 Q2031291)) (JOIN P31 Q15617994))) (AND (JOIN (R P495) Q717) (JOIN P31 Q15617994)))',
         '(COUNT (GT (GROUP_COUNT (AND (JOIN P530 (JOIN P31 Q15617994)) (JOIN P31 Q15617994))) 0))',
         '(ARGMAX (GROUP_COUNT (AND (JOIN P1441 (JOIN P31 Q2342494)) (JOIN P31 Q3895768))))',
@@ -225,5 +282,5 @@ if __name__ == '__main__':
         print()
         print(expression)
         print()
-        print(parser.parse_expr(expression))
+        print(expression_to_sparql(expression))
         print()

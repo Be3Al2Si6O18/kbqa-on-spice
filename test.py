@@ -1,50 +1,22 @@
 import json
-import urllib
-import time
-from SPARQLWrapper import SPARQLWrapper, JSON
+from utils.execute_query import execute_query
 
-sparql = SPARQLWrapper("http://localhost:9999/blazegraph/sparql")
-sparql.setReturnFormat(JSON)
+data = json.load(open('output/memory_core_1/prediction.json', 'r'))
 
-def execute_query(query: str):
-    sparql.setQuery('prefix wd: <http://www.wikidata.org/entity/> prefix wdt: <http://www.wikidata.org/prop/direct/> ' + query)
-    try:
-        results = sparql.query().convert()
-    except:
-    # except urllib.error.URLError:
-        print(query)
-        exit(0)
-    if query.startswith('ASK'):
-        return results['boolean']
-    else:
-        return [binding[var]['value'].split('/')[-1] for binding in results['results']['bindings'] for var in binding]
+new_data = []
+for i, qa in enumerate(data):
+    results1 = execute_query(qa['sparql_delex'])
+    results2 = execute_query(qa['actions'])
+    if isinstance(results1, bool):
+        if results1 != results2:
+            new_data.append(qa)
+    elif isinstance(results1, list):
+        if not isinstance(results2, list) or sorted(results1) != sorted(results2):
+            new_data.append(qa)
+    if (i + 1) % 100 == 0:
+        print(f'{i + 1}/{len(data)}', flush=True)
+json.dump(new_data, open('prediction.json', 'w'), indent=2)
 
-data = json.load(open('data/processed_spice_data/train_full.json', 'r'))[:10000]
-
-correct = 0
-total = 0
-t0 = time.time()
-for i in range(len(data)):
-    time.sleep(0.1)
-    example = data[i]
-    if i % 100 == 0 and i > 0:
-        t = time.time()
-        print(f"{i}/{len(data)} -- {correct}/{total} -- {t - t0:.2f}s", flush=True)
-    results0 = execute_query(example['sparql_query'])
-    results = execute_query(example['new_sparql'])
-    if results0 == results or set(results0) == set(results):
-        correct += 1
-    else:
-        print(example['sparql_query'])
-        print()
-        print(example['s_expression'])
-        print()
-        print(example['new_sparql'])
-        if len(results0) > 1:
-            print(len(results0), len(results))
-        else:
-            print(results0[0], results[0])
-    total += 1
-
-print(correct, total)
-print(f"time: {(time.time() - t0):.2f}s")
+attr_list = ['turnID', 'question_type', 'question', 'coreference_resolved_question', 's_expression_cores_fn', 'predicted_cores', 'calibrated_cores_fn', 'simple_question_type', 'predicted_simple_question_type', 'template', 'predicted_template', 'replacements', 'predicted_replacements', 'sparql_attempt_count', 's_expression_fn', 'predicted_s_expression_fn', 'sparql_delex', 'actions']
+simple_data = [{attr: qa[attr] for attr in attr_list} for qa in new_data]
+json.dump(simple_data, open('simple_prediction.json', 'w'), indent=2)

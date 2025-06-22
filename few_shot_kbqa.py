@@ -242,7 +242,7 @@ def from_fn_to_id_set(fn_list, question, name_to_id_dict, bm25_all_fns, all_fns)
             mids = get_right_mid_set(fn.lower(), id_dict, question)
         else:
             mids = sorted(id_dict.items(), key=lambda x: x[1], reverse=True)
-            mids = [mid[0] for mid in mids]
+            mids = [mid for mid, score in mids]
         return_mid_list.append(mids)
     return return_mid_list
 
@@ -302,7 +302,7 @@ def bound_to_existed(question, s_expression, found_mids, two_hop_rela_dict,
                      relationship_to_enti, hsearcher, rela_corpus, relationships):
     possible_relationships_can = []
     possible_relationships = []
-    # logger.info("before 2 hop rela")
+    # 对found_mids中的每个mid，寻找其不以common,base,type开头的二跳关系，加入possible_relationships
     updating_two_hop_rela_dict = two_hop_rela_dict.copy()
     for mid in found_mids:
         if mid in updating_two_hop_rela_dict:
@@ -314,19 +314,18 @@ def bound_to_existed(question, s_expression, found_mids, two_hop_rela_dict,
             updating_two_hop_rela_dict[mid] = relas
             possible_relationships_can += list(set(relas[0]))
             possible_relationships_can += list(set(relas[1]))
-    # logger.info("after 2 hop rela")
     for rela in possible_relationships_can:
         if not rela.startswith('common') and not rela.startswith('base') and not rela.startswith('type'):
             possible_relationships.append(rela)
     if not possible_relationships:
         possible_relationships = relationships.copy()
-    expression_segment = s_expression.split(" ")
-    # print("possible_relationships: ", possible_relationships)
     possible_relationships = list(set(possible_relationships))
+
+    expression_segment = s_expression.split(" ")
     relationship_replace_dict = {}
-    lemma_tags = {"NNS", "NNPS"}
     for i, seg in enumerate(expression_segment):
         processed_seg = seg.strip(')')
+        # 如果seg是关系fn
         if '.' in seg and not seg.startswith('m.') and not seg.startswith('g.') and not (
                 expression_segment[i - 1].endswith("AND") or expression_segment[i - 1].endswith("COUNT") or
                 expression_segment[i - 1].endswith("MAX") or expression_segment[i - 1].endswith("MIN")) and (

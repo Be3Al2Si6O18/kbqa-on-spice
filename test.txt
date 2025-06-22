@@ -1,0 +1,47 @@
+Simple Question (Direct) [Simple Question] 57
+Simple Question (Direct) [Simple Question|Single Entity] 77
+Simple Question (Coreferenced) [Simple Question|Single Entity|Indirect] 110
+Simple Question (Direct) [Simple Question|Mult. Entity|Indirect] 13
+Logical Reasoning (All) [Logical|Union|Single_Relation] 12
+Quantitative Reasoning (Count) (All) [Quantitative|Count over Atleast/ Atmost/ Approx. the same/Equal|Mult. entity type] 10
+Comparative Reasoning (All) [Comparative|More/Less|Mult. entity type] 14
+Comparative Reasoning (All) [Comparative|More/Less|Mult. entity type|Incomplete] 10
+Simple Question (Coreferenced) [Simple Question|Mult. Entity] 18
+Simple Question (Coreferenced) 19
+Comparative Reasoning (Count) (All) [Comparative|Count over More/Less|Single entity type] 15
+Verification (Boolean) (All) [Verification|3 entities, 2 direct, 2(direct) are query entities, subject is indirect] 11
+Verification (Boolean) (All) [Verification|2 entities, both direct] 13
+Logical Reasoning (All) [Logical|Union|Multiple_Relation] 10
+Verification (Boolean) (All) [Verification|one entity, multiple entities (as object) referred indirectly] 17
+Comparative Reasoning (All) [Comparative|More/Less|Single entity type] 14
+Comparative Reasoning (All) [Comparative|More/Less|Single entity type|Incomplete] 11
+Comparative Reasoning (Count) (All) [Comparative|Count over More/Less|Mult. entity type] 14
+Quantitative Reasoning (All) [Quantitative|Min/Max|Mult. entity type] 11
+Quantitative Reasoning (Count) (All) [Quantitative|Count over Atleast/ Atmost/ Approx. the same/Equal|Single entity type] 10
+Quantitative Reasoning (All) [Quantitative|Atleast/ Atmost/ Approx. the same/Equal|Mult. entity type] 11
+Quantitative Reasoning (Count) (All) [Quantitative|Count|Single entity type] 18
+Quantitative Reasoning (Count) (All) [Incomplete count-based ques] 11
+Comparative Reasoning (Count) (All) [Comparative|Count over More/Less|Single entity type|Incomplete] 10
+Comparative Reasoning (Count) (All) [Comparative|Count over More/Less|Mult. entity type|Incomplete] 10
+Logical Reasoning (All) [Logical|Intersection|Multiple_Relation] 11
+Verification (Boolean) (All) [Verification|2 entities, one direct and one indirect, object is indirect] 14
+Logical Reasoning (All) [Logical|Difference|Multiple_Relation] 10
+Quantitative Reasoning (Count) (All) [Quantitative|Count|Single entity type|Indirect] 11
+Comparative Reasoning (All) [Comparative|More/Less|Single entity type|Indirect] 10
+Simple Question (Ellipsis) [only subject is changed, parent and predicate remains same] 23
+Quantitative Reasoning (Count) (All) [Quantitative|Count|Mult. entity type] 10
+Logical Reasoning (All) [Logical|Intersection|Single_Relation] 11
+Verification (Boolean) (All) [Verification|3 entities, all direct, 2 are query entities] 12
+Comparative Reasoning (Count) (All) [Comparative|Count over More/Less|Mult. entity type|Indirect] 10
+Quantitative Reasoning (Count) (All) [Quantitative|Count|Logical operators|Indirect] 11
+Verification (Boolean) (All) [Verification|2 entities, one direct and one indirect, subject is indirect] 10
+Quantitative Reasoning (Count) (All) [Quantitative|Count|Logical operators] 11
+Comparative Reasoning (Count) (All) [Comparative|Count over More/Less|Single entity type|Indirect] 10
+Quantitative Reasoning (All) [Quantitative|Atleast/ Atmost/ Approx. the same/Equal|Single entity type] 11
+Simple Question (Ellipsis) [Incomplete|object parent is changed, subject and predicate remain same] 10
+Logical Reasoning (All) [Logical|Difference|Single_Relation] 10
+Logical Reasoning (All) [Logical|Intersection|Single_Relation|Incomplete] 10
+Logical Reasoning (All) [Logical|Union|Single_Relation|Incomplete] 10
+Quantitative Reasoning (All) [Quantitative|Min/Max|Single entity type] 10
+Comparative Reasoning (All) [Comparative|More/Less|Mult. entity type|Indirect] 10
+Logical Reasoning (All) [Logical|Difference|Single_Relation|Incomplete] 6
